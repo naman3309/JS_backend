@@ -1,4 +1,4 @@
-class errorHandler extends Error{
+class apiErrorHandler extends Error{
     constructor(message = "Something is wrong",statusCode, stack = "", errors = []){
         super(message)
         this.statusCode = statusCode
@@ -15,4 +15,4 @@ class errorHandler extends Error{
     }
 }
 
-export {errorHandler}
+export {apiErrorHandler}
