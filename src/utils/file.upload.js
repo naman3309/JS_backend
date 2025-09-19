@@ -1,7 +1,7 @@
 import {v2 as cloudinary} from "cloudinary";
 import fs from "fs";
 
-const uploadFile = async(filePath)=>{
+const uploadFileCloudinary = async(filePath)=>{
     try{
         if(!filePath) return null
 
@@ -16,4 +16,4 @@ const uploadFile = async(filePath)=>{
     }
 }
 
-export {uploadFile}
+export {uploadFileCloudinary}
