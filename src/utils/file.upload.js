@@ -5,7 +5,8 @@ const uploadFileCloudinary = async(filePath)=>{
     try{
         if(!filePath) return null
 
-        const resp = cloudinary.uploader.uploadFile(filePath,{resource_type:"auto"})
+        const resp = await cloudinary.uploader.upload(filePath,{resource_type:"auto"})
+        // console.log("resp : "+resp)
         return resp;
     }
     catch(error){
