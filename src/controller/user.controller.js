@@ -3,12 +3,13 @@ import { apiErrorHandler } from "../utils/apiErrorHandler.js"
 import { User } from "../models/user.model.js"
 import { apiResponse } from "../utils/apiResponse.js"
 import { uploadFileCloudinary } from "../utils/file.upload.js"
-import { jwt } from "jsonwebtoken"
+import jwt from "jsonwebtoken"
 
 const generateAccessAndRefreshToken = async (user) => {
     const accessToken = await user.generateAccessToken()
     const refreshToken = await user.generateRefreshToken()
-    return accessToken, refreshToken
+    // console.log("from fun", accessToken, refreshToken, user)
+    return { accessToken, refreshToken };
 }
 
 const userRegister = asyncHandler(
@@ -95,7 +96,7 @@ const userLogin = asyncHandler(
             throw new apiErrorHandler("Either password or username is wrong", 401)
         }
 
-        const { accessToken, refreshToken } = generateAccessAndRefreshToken(registeredUser)
+        const { accessToken, refreshToken } = await generateAccessAndRefreshToken(registeredUser)
 
         registeredUser.refreshToken = refreshToken
 
@@ -104,7 +105,7 @@ const userLogin = asyncHandler(
         delete registeredUser.password
         delete registeredUser.refreshToken
 
-
+        // console.log("from controller", accessToken, refreshToken)
 
         return res.status(200)
             .cookie("accessToken", accessToken, options)
@@ -116,6 +117,7 @@ const userLogin = asyncHandler(
 )
 
 const logout = asyncHandler(async (req, res) => {
+    console.log(req.user)
     await User.findByIdAndUpdate(req.user?._id, {
         $set: {
             refreshToken: undefined
@@ -135,40 +137,57 @@ const logout = asyncHandler(async (req, res) => {
 })
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
-    const localRefrershToken = req.cookie.refreshToken || req.body.refreshToken
+    const localRefrershToken = req.cookies.refreshToken || req.body.refreshToken
     if (!localRefrershToken) {
         throw new apiErrorHandler("Unauthorized access", 401)
     }
 
-try {
-        const decodedToken = jwt.verify(localRefrershToken,process.env.REFRESH_TOKEN_SECRET)
-    
-    
+    try {
+        const decodedToken = jwt.verify(localRefrershToken, process.env.REFRESH_TOKEN_SECRET)
+
         const user = await User.findById(decodedToken._id)
-    
-        if(!user)
-            throw new apiErrorHandler("Invalid Token",401)
-    
-        if(localRefrershToken !== user.refreshToken)
-            throw new apiErrorHandler("Token is expired or used",400)
-    
-        const {accessToken,refreshToken} = generateAccessAndRefreshToken(user)
-    
+
+        if (!user)
+            throw new apiErrorHandler("Invalid Token", 401)
+
+        if (localRefrershToken !== user.refreshToken)
+            throw new apiErrorHandler("Token is expired or used", 400)
+
+        const { accessToken, refreshToken } = generateAccessAndRefreshToken(user)
+
+        await User.findByIdAndUpdate(user._id,{
+            $set : {
+                refreshToken:refreshToken
+            }
+        })
+
         return res
             .status(200)
-            .cookie("accessToken",accessToken)
-            .cookie("refreshToken",refreshToken)
+            .cookie("accessToken", accessToken)
+            .cookie("refreshToken", refreshToken)
             .json(
-                new apiResponse(200,{
-                    accessToken,refreshToken
+                new apiResponse(200, {
+                    accessToken, refreshToken
                 },
-                "Tokens refreshed"
+                    "Tokens refreshed"
+                )
             )
-            )
-} catch (error) {
-    throw new apiErrorHandler(error?.message,401)    
-}
+    } catch (error) {
+        throw new apiErrorHandler(error?.message, 401)
+    }
 })
 
+const changePassword = asyncHandler(async (req, res) => {
+    const {oldPassword, newPassword} = req.body
+    const user = await User.findById(req.user?._id)
+    const isValid = user.isPasswordCorrect(oldPassword)
+    if(!isValid) 
+        throw new apiErrorHandler("Incorrect Password")
 
-export { userRegister, userLogin, logout, refreshAccessToken }
+    user.password = newPassword
+    await user.save()
+    return res.status(200)
+    .json(new apiResponse(200,{},"Password changed Successfully"))
+})
+
+export { userRegister, userLogin, logout, refreshAccessToken, changePassword }
