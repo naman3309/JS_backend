@@ -29,7 +29,7 @@ const userRegister = asyncHandler(
 
         if (exsitedUser)
             throw new apiErrorHandler("User with same username or email already exist", 409)
-
+        
         let avatarLocalPath
         if (req.files && Array.isArray(req.files.avatar) && req.files.avatar.length > 0)
             avatarLocalPath = req.files?.avatar[0]?.path;
@@ -92,7 +92,7 @@ const userLogin = asyncHandler(
 
         if (!password) throw new apiErrorHandler("Password is required", 400)
 
-        if (!registeredUser.isPasswordCorrect(password)) {
+        if (!await registeredUser.isPasswordCorrect(password)) {
             throw new apiErrorHandler("Either password or username is wrong", 401)
         }
 
@@ -112,7 +112,8 @@ const userLogin = asyncHandler(
             .cookie("refreshToken", refreshToken, options)
             .json(
                 new apiResponse(200, { user: registeredUser, accessToken, refreshToken })
-            )
+            ),
+            "Login Success"
     }
 )
 
@@ -144,27 +145,26 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
     try {
         const decodedToken = jwt.verify(localRefrershToken, process.env.REFRESH_TOKEN_SECRET)
-
         const user = await User.findById(decodedToken._id)
-
+        
         if (!user)
             throw new apiErrorHandler("Invalid Token", 401)
-
+        
         if (localRefrershToken !== user.refreshToken)
             throw new apiErrorHandler("Token is expired or used", 400)
+        
+        const { accessToken, refreshToken } = await generateAccessAndRefreshToken(user)
 
-        const { accessToken, refreshToken } = generateAccessAndRefreshToken(user)
-
-        await User.findByIdAndUpdate(user._id,{
-            $set : {
-                refreshToken:refreshToken
+        await User.findByIdAndUpdate(user._id, {
+            $set: {
+                refreshToken: refreshToken
             }
         })
 
         return res
             .status(200)
-            .cookie("accessToken", accessToken)
-            .cookie("refreshToken", refreshToken)
+            .cookie("accessToken", accessToken,options)
+            .cookie("refreshToken", refreshToken,options)
             .json(
                 new apiResponse(200, {
                     accessToken, refreshToken
@@ -178,16 +178,41 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 })
 
 const changePassword = asyncHandler(async (req, res) => {
-    const {oldPassword, newPassword} = req.body
+    const { oldPassword, newPassword } = req.body
     const user = await User.findById(req.user?._id)
-    const isValid = user.isPasswordCorrect(oldPassword)
-    if(!isValid) 
-        throw new apiErrorHandler("Incorrect Password")
+    const isValid = await user.isPasswordCorrect(oldPassword)
+    if (!isValid)
+        throw new apiErrorHandler("Incorrect Password",401)
 
     user.password = newPassword
-    await user.save()
+    await user.save({ validateBeforeSave: false })
     return res.status(200)
-    .json(new apiResponse(200,{},"Password changed Successfully"))
+        .json(new apiResponse(200, {user}, "Password changed Successfully"))
 })
 
-export { userRegister, userLogin, logout, refreshAccessToken, changePassword }
+const changeAvatarImage = asyncHandler(async (req, res) => {
+    let avatarLocalPath
+    console.log(req.file)
+    if (req.file && req.file.path){
+        console.log(req.file)
+        avatarLocalPath = req.file?.path;
+    }
+
+    if(!avatarLocalPath)
+        throw new apiErrorHandler("file local",400)
+    
+    const avatar = await uploadFileCloudinary(avatarLocalPath)
+    if(!avatar)
+        throw new apiErrorHandler("Avatar is required",400)
+    
+    await User.findByIdAndUpdate(req.user._id,{
+        $set:{avatar : avatar}
+    })
+
+    return res.status(200)
+            .json(new apiResponse(200,{},"Avatar changed successfully"))
+    
+
+})
+
+export { userRegister, userLogin, logout, refreshAccessToken, changePassword, changeAvatarImage }
