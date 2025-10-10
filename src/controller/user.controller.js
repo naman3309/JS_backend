@@ -4,6 +4,8 @@ import { User } from "../models/user.model.js"
 import { apiResponse } from "../utils/apiResponse.js"
 import { uploadFileCloudinary } from "../utils/file.upload.js"
 import jwt from "jsonwebtoken"
+import { Subscription } from "../models/subscription.model.js"
+import {ObjectId} from "mongoose"
 
 const generateAccessAndRefreshToken = async (user) => {
     const accessToken = await user.generateAccessToken()
@@ -29,7 +31,7 @@ const userRegister = asyncHandler(
 
         if (exsitedUser)
             throw new apiErrorHandler("User with same username or email already exist", 409)
-        
+
         let avatarLocalPath
         if (req.files && Array.isArray(req.files.avatar) && req.files.avatar.length > 0)
             avatarLocalPath = req.files?.avatar[0]?.path;
@@ -146,13 +148,13 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
     try {
         const decodedToken = jwt.verify(localRefrershToken, process.env.REFRESH_TOKEN_SECRET)
         const user = await User.findById(decodedToken._id)
-        
+
         if (!user)
             throw new apiErrorHandler("Invalid Token", 401)
-        
+
         if (localRefrershToken !== user.refreshToken)
             throw new apiErrorHandler("Token is expired or used", 400)
-        
+
         const { accessToken, refreshToken } = await generateAccessAndRefreshToken(user)
 
         await User.findByIdAndUpdate(user._id, {
@@ -163,8 +165,8 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
         return res
             .status(200)
-            .cookie("accessToken", accessToken,options)
-            .cookie("refreshToken", refreshToken,options)
+            .cookie("accessToken", accessToken, options)
+            .cookie("refreshToken", refreshToken, options)
             .json(
                 new apiResponse(200, {
                     accessToken, refreshToken
@@ -182,37 +184,172 @@ const changePassword = asyncHandler(async (req, res) => {
     const user = await User.findById(req.user?._id)
     const isValid = await user.isPasswordCorrect(oldPassword)
     if (!isValid)
-        throw new apiErrorHandler("Incorrect Password",401)
+        throw new apiErrorHandler("Incorrect Password", 401)
 
     user.password = newPassword
     await user.save({ validateBeforeSave: false })
     return res.status(200)
-        .json(new apiResponse(200, {user}, "Password changed Successfully"))
+        .json(new apiResponse(200, { user }, "Password changed Successfully"))
 })
 
 const changeAvatarImage = asyncHandler(async (req, res) => {
     let avatarLocalPath
-    console.log(req.file)
-    if (req.file && req.file.path){
-        console.log(req.file)
+    if (req.file && req.file.path) {
         avatarLocalPath = req.file?.path;
     }
 
-    if(!avatarLocalPath)
-        throw new apiErrorHandler("file local",400)
-    
+    if (!avatarLocalPath)
+        throw new apiErrorHandler("file local", 400)
+
     const avatar = await uploadFileCloudinary(avatarLocalPath)
-    if(!avatar)
-        throw new apiErrorHandler("Avatar is required",400)
-    
-    await User.findByIdAndUpdate(req.user._id,{
-        $set:{avatar : avatar}
+    if (!avatar)
+        throw new apiErrorHandler("Avatar is required", 400)
+
+    await User.findByIdAndUpdate(req.user._id, {
+        $set: { avatar: avatar }
     })
 
     return res.status(200)
-            .json(new apiResponse(200,{},"Avatar changed successfully"))
-    
+        .json(new apiResponse(200, {}, "Avatar changed successfully"))
+
 
 })
 
-export { userRegister, userLogin, logout, refreshAccessToken, changePassword, changeAvatarImage }
+const changeDetails = asyncHandler(async (req, res) => {
+    const updates = {};
+    Object.entries(req.body).forEach(([key, value]) => {
+        if (key === "password" || key === "refreshToken" || key === "_id" || key === "__v") {
+            return
+        }
+        if (value !== null && value !== undefined && value !== "") {
+            updates[key] = value;
+        }
+    });
+
+    if (Object.keys(updates).length === 0) {
+        throw new apiErrorHandler("No valid fields to update", 400);
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+        req.user._id,
+        { $set: updates },
+        { new: true, runValidators: true }
+    ).select("-password -refreshToken");
+
+    return res.status(200).json(
+        new apiResponse(200, updatedUser, "User details updated successfully")
+    );
+});
+
+const getWatchHistory = asyncHandler(async (req, res) => {
+    const user = await User.aggregate([
+        {
+            $match: {
+                _id: new ObjectId(req.user._id)
+            },
+            $lookup:{
+                from:"videos",
+                localField: "watchHistory",
+                foreignField: "_id",
+                as: "watchHistory",
+                pipeline:[
+                    {
+                        $lookup:{
+                            from: "users",
+                            localField: "owner",
+                            foreignField: "_id",
+                            as: "owner",
+                            pipeline:[{
+                                $project:{
+                                    fullName:1,
+                                    username:1,
+                                    avatarUrl:1
+                                }
+                            }]
+                        }
+                    },
+                    {
+                        $addFields: {
+                            owner:{
+                                $first:"$owner"
+                            }
+                        }
+                    }
+                ]
+            },
+            
+        }
+    ])
+
+    return res.status(200)
+            .json(new apiResponse(
+                200,
+                user[0].watchHistory,
+                "Watch History fetched successfully"
+            ))
+})
+
+const getProfile = asyncHandler(async (req, res) => {
+    const username = req.params
+    if (!username?.trim()) {
+        throw new apiErrorHandler("Invalid Username", 400)
+    }
+
+    const channel = await User.aggregate({
+        $match: {
+            username: username?.toLowerCase()
+        }
+    },
+        {
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        {
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+        },
+        {
+            $addFields: {
+                subscribersCount: {
+                    $size: "subscribers"
+                },
+                channelSubscribedToCount: {
+                    $size: "subscribedTo"
+                },
+                isSubscribed: {
+                    $cond: {
+                        if: { $in: [req.user?._id, "$subscriptions.subscribers"] },
+                        then: true,
+                        else: false
+                    }
+                }
+            }
+        },
+        {
+            $project: {
+                username: 1,
+                email: 1,
+                fullName: 1,
+                subscribersCount: 1,
+                isSubscribed: 1,
+                channelSubscribedToCount: 1,
+                avatar: 1,
+                coverImage: 1
+            }
+        }
+    )
+
+    return res
+        .status(200)
+        .json(new apiResponse(200, channel[0], "User Profile fetched successfully"))
+})
+
+export { userRegister, userLogin, logout, refreshAccessToken, changePassword, changeAvatarImage, changeDetails, getProfile, getWatchHistory }
